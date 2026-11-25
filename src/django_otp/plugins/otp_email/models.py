@@ -162,3 +162,9 @@ class EmailDevice(TimestampMixin, CooldownMixin, ThrottlingMixin, SideChannelDev
         Returns :setting:`OTP_EMAIL_THROTTLE_FACTOR`.
         """
         return settings.OTP_EMAIL_THROTTLE_FACTOR
+
+    def get_throttle_max_delay(self):
+        """
+        Returns :setting:`OTP_EMAIL_THROTTLE_MAX_DELAY`.
+        """
+        return settings.OTP_EMAIL_THROTTLE_MAX_DELAY

@@ -1,3 +1,18 @@
+Unreleased - Throttling recovery and bounded lockouts
+--------------------------------------------------------------------------------
+
+- Cap exponential throttling back-off at a configurable maximum delay
+  (``OTP_*_THROTTLE_MAX_DELAY``, default 900 seconds) instead of letting it
+  grow without a practical limit.
+- Add ``ThrottlingMixin.throttling_locked_until`` and lazily clear the
+  accumulated failure state once the lockout window elapses, so devices
+  recover on their own instead of remaining permanently locked until an
+  administrator edits the database.
+- Add migrations for the new field, including a data migration that backfills
+  ``throttling_locked_until`` for existing devices and bounds previously
+  permanent lockouts.
+
+
 v1.7.5 - October 16, 2026 - Revoke sessions for unconfirmed devices
 --------------------------------------------------------------------------------
 

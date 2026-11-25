@@ -28,6 +28,9 @@ class StaticDevice(TimestampMixin, ThrottlingMixin, Device):
     def get_throttle_factor(self):
         return getattr(settings, 'OTP_STATIC_THROTTLE_FACTOR', 1)
 
+    def get_throttle_max_delay(self):
+        return getattr(settings, 'OTP_STATIC_THROTTLE_MAX_DELAY', 900)
+
     def verify_token(self, token):
         verify_allowed, _ = self.verify_is_allowed()
         if verify_allowed:

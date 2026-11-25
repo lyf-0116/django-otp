@@ -77,7 +77,7 @@ functionality.
    :members: get_cooldown_duration, generate_is_allowed, cooldown_reset, cooldown_set
 
 .. autoclass:: django_otp.models.ThrottlingMixin
-   :members: get_throttle_factor, verify_is_allowed, throttle_reset, throttle_increment
+   :members: get_throttle_factor, get_throttle_max_delay, verify_is_allowed, throttle_reset, throttle_increment
 
 .. autoclass:: django_otp.models.TimestampMixin
    :members: set_last_used_timestamp

@@ -11,11 +11,16 @@ from django.utils.functional import cached_property
 
 from .util import random_number_token
 
-# The exponential throttling delay can grow arbitrarily large with a high
-# enough failure count, well past what `timedelta` can represent. Cap it at
-# something that's already far longer than any realistic lockout needs to
-# be, rather than let the delay calculation overflow.
+# Deprecated: lockouts are now capped at the configurable
+# DEFAULT_THROTTLE_MAX_DELAY instead of this effectively-infinite value.
+# Retained for backwards compatibility with code that imported the constant.
 MAX_THROTTLE_DELAY_SECONDS = timedelta(days=365 * 100).total_seconds()
+
+# Default upper bound on a single lockout window. Exponential back-off still
+# applies to the first failures, but the delay can never exceed this. Once
+# the window elapses the failure state decays lazily, so a device can always
+# recover on its own instead of remaining locked until an admin intervenes.
+DEFAULT_THROTTLE_MAX_DELAY = timedelta(minutes=15).total_seconds()
 
 
 class DeviceManager(models.Manager):
@@ -469,8 +474,14 @@ class ThrottlingMixin(models.Model):
     """
     Mixin class for models that want throttling behaviour.
 
-    This implements exponential back-off for verifying tokens. Subclasses must
-    implement :meth:`get_throttle_factor`, and must use the
+    This implements exponential back-off for verifying tokens. Each successive
+    failure doubles the required delay, but the delay is capped at
+    :meth:`get_throttle_max_delay`. Every lockout is therefore finite and the
+    accumulated failure state decays lazily once its lockout window elapses,
+    so a device always recovers on its own after a period without failures; a
+    successful verification clears the state immediately.
+
+    Subclasses must implement :meth:`get_throttle_factor`, and must use the
     :meth:`verify_is_allowed`, :meth:`throttle_reset` and
     :meth:`throttle_increment` methods from within their verify_token() method.
 
@@ -479,11 +490,19 @@ class ThrottlingMixin(models.Model):
 
     .. attribute:: throttling_failure_timestamp
 
-        The datetime of the last failed verification attempt.
+        The datetime of the most recent failure within the active lockout
+        window.
 
     .. attribute:: throttling_failure_count
 
-        The number of consecutive failed verification attempts.
+        The number of failed verification attempts accumulated in the current
+        lockout window. It resets to zero when the window elapses or a
+        verification succeeds.
+
+    .. attribute:: throttling_locked_until
+
+        The datetime until which verification is disallowed. ``None`` when the
+        device is not currently locked.
 
     """
 
@@ -499,6 +518,16 @@ class ThrottlingMixin(models.Model):
 
     throttling_failure_count = models.PositiveIntegerField(
         default=0, help_text="Number of successive failed attempts."
+    )
+
+    throttling_locked_until = models.DateTimeField(
+        null=True,
+        blank=True,
+        default=None,
+        help_text=(
+            "The datetime until which verification is disabled. Null if the"
+            " device is not currently locked."
+        ),
     )
 
     class Meta:
@@ -520,30 +549,42 @@ class ThrottlingMixin(models.Model):
         :class:`~django_otp.models.VerifyNotAllowed`.
 
         """
+        self._throttle_decay_if_expired()
+
         if (
             self.throttling_enabled
             and self.throttling_failure_count > 0
-            and self.throttling_failure_timestamp is not None
+            and self.throttling_locked_until is not None
         ):
             now = timezone.now()
-            delay = (now - self.throttling_failure_timestamp).total_seconds()
-            # Required delays should be 1, 2, 4, 8 ...
-            delay_required = min(
-                self.get_throttle_factor() * (2 ** (self.throttling_failure_count - 1)),
-                MAX_THROTTLE_DELAY_SECONDS,
-            )
-            if delay < delay_required:
+            if now < self.throttling_locked_until:
                 return (
                     False,
                     {
                         'reason': VerifyNotAllowed.N_FAILED_ATTEMPTS,
                         'failure_count': self.throttling_failure_count,
-                        'locked_until': self.throttling_failure_timestamp
-                        + timedelta(seconds=delay_required),
+                        'locked_until': self.throttling_locked_until,
                     },
                 )
 
         return super().verify_is_allowed()
+
+    def _throttle_decay_if_expired(self, commit=True):
+        """
+        Lazily clear the accumulated failure state once its lockout window
+        has fully elapsed.
+
+        This is the recovery half of the throttling curve: failures accumulate
+        while a device is being attacked, but without needing a background
+        task the state simply expires the next time the device is touched. A
+        device can therefore never be locked out permanently.
+        """
+        if (
+            self.throttling_failure_count > 0
+            and self.throttling_locked_until is not None
+            and timezone.now() >= self.throttling_locked_until
+        ):
+            self.throttle_reset(commit=commit)
 
     def throttle_reset(self, commit=True):
         """
@@ -556,6 +597,7 @@ class ThrottlingMixin(models.Model):
         """
         self.throttling_failure_timestamp = None
         self.throttling_failure_count = 0
+        self.throttling_locked_until = None
         if commit:
             self.save()
 
@@ -568,14 +610,37 @@ class ThrottlingMixin(models.Model):
             yourself.
 
         """
+        self._throttle_decay_if_expired(commit=False)
+
+        now = timezone.now()
         self.throttling_failure_timestamp = timezone.now()
         self.throttling_failure_count += 1
+
+        # Required delays should be 1, 2, 4, 8 ..., capped so a lockout can
+        # never grow into an effectively permanent one.
+        delay_required = min(
+            self.get_throttle_factor() * (2 ** (self.throttling_failure_count - 1)),
+            self.get_throttle_max_delay(),
+        )
+        self.throttling_locked_until = now + timedelta(seconds=delay_required)
+
         if commit:
             self.save()
 
     @cached_property
     def throttling_enabled(self):
         return self.get_throttle_factor() > 0
+
+    def get_throttle_max_delay(self):
+        """
+        Returns the maximum lockout window in seconds.
+
+        The exponential back-off imposed after successive failures is capped
+        at this value, which keeps every lockout finite and lets the failure
+        state decay within a bounded, user-recoverable timeframe. Subclasses
+        normally override this to read a plugin-specific setting.
+        """
+        return DEFAULT_THROTTLE_MAX_DELAY
 
     def get_throttle_factor(self):  # pragma: no cover
         """

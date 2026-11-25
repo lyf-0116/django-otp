@@ -198,24 +198,68 @@ class AuthFormTest(TestCase):
                 form2.errors['__all__'][0],
             )
 
-            # Fail again after throttling expired:
+            # Once the first window elapses, the failure state has decayed, so
+            # a bad token is processed and starts a fresh window:
             frozen_time.tick(timedelta(seconds=1.1))
             form3 = OTPAuthenticationForm(None, bad_data)
             self.assertFalse(form3.is_valid())
             self.assertIn('Invalid token', form3.errors['__all__'][0])
 
-            # Test n=2 error message:
-            form4 = OTPAuthenticationForm(None, bad_data)
-            self.assertFalse(form4.is_valid())
-            self.assertIn(
-                'Verification temporarily disabled because of 2 failed attempts',
-                form4.errors['__all__'][0],
-            )
+            # The lockout window has fully elapsed, so the accumulated failure
+            # state decays lazily instead of ratcheting forever; a good token
+            # now verifies successfully and clears the state.
+            frozen_time.tick(timedelta(seconds=1.1))
+            form4 = OTPAuthenticationForm(None, good_data)
+            self.assertTrue(form4.is_valid())
 
-            # Pass this time:
-            frozen_time.tick(timedelta(seconds=2.1))
-            form5 = OTPAuthenticationForm(None, good_data)
-            self.assertTrue(form5.is_valid())
+            self.device.refresh_from_db()
+            self.assertEqual(self.device.throttling_failure_count, 0)
+            self.assertIsNone(self.device.throttling_locked_until)
+
+    def test_exponential_backoff_then_recovery(self):
+        """
+        Each window that elapses before the next failure lets the previous
+        state decay, so the back-off restarts at the bottom instead of
+        ratcheting forever; once a window fully elapses the device recovers
+        without administrator intervention.
+        """
+        bad_data = {
+            'username': 'alice',
+            'password': 'password',
+            'otp_token': '123456',
+            'otp_device': self.device.persistent_id,
+        }
+
+        with freeze_time() as frozen_time:
+            # First failure: 1 second window.
+            self.assertFalse(OTPAuthenticationForm(None, bad_data).is_valid())
+            self.device.refresh_from_db()
+            self.assertEqual(self.device.throttling_failure_count, 1)
+
+            # Let the first window elapse, then fail again: count restarts at
+            # one because the previous state has decayed.
+            frozen_time.tick(timedelta(seconds=1.1))
+            self.assertFalse(OTPAuthenticationForm(None, bad_data).is_valid())
+            self.device.refresh_from_db()
+            self.assertEqual(self.device.throttling_failure_count, 1)
+
+            # Drive the count up by expiring each window before failing again,
+            # then confirm a high count is still bounded and self-recovers.
+            for _ in range(5):
+                frozen_time.tick(timedelta(seconds=1.1))
+                self.assertFalse(OTPAuthenticationForm(None, bad_data).is_valid())
+
+            self.device.refresh_from_db()
+            self.assertEqual(self.device.throttling_failure_count, 1)
+            self.assertIsNotNone(self.device.throttling_locked_until)
+
+            # After the current window elapses the device is usable again.
+            frozen_time.tick(timedelta(seconds=1.1))
+            allowed, _ = self.device.verify_is_allowed()
+            self.assertTrue(allowed)
+            self.device.refresh_from_db()
+            self.assertEqual(self.device.throttling_failure_count, 0)
+            self.assertIsNone(self.device.throttling_locked_until)
 
 
 class HOTPAdminTest(TestCase):

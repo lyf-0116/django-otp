@@ -140,6 +140,9 @@ class TOTPDevice(TimestampMixin, ThrottlingMixin, Device):
     def get_throttle_factor(self):
         return getattr(settings, 'OTP_TOTP_THROTTLE_FACTOR', 1)
 
+    def get_throttle_max_delay(self):
+        return getattr(settings, 'OTP_TOTP_THROTTLE_MAX_DELAY', 900)
+
     @property
     def config_url(self):
         """

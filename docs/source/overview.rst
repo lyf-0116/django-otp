@@ -276,7 +276,23 @@ Default: ``1``
 
 This controls the rate of throttling. The sequence of 1, 2, 4, 8... seconds is
 multiplied by this factor to define the delay imposed after 1, 2, 3, 4...
-successive failures. Set to ``0`` to disable throttling completely.
+successive failures. Set to ``0`` to disable throttling completely. The delay
+is capped at :setting:`OTP_HOTP_THROTTLE_MAX_DELAY` and the accumulated
+failure state expires on its own once the lockout window elapses, so a device
+always recovers without administrator intervention.
+
+
+.. setting:: OTP_HOTP_THROTTLE_MAX_DELAY
+
+**OTP_HOTP_THROTTLE_MAX_DELAY**
+
+Default: ``900``
+
+The maximum length, in seconds, of a single lockout window. Exponential
+back-off still applies to the first successive failures, but once the computed
+delay reaches this value it stops growing. After the window elapses the
+failure count is cleared lazily on the next verification attempt, which keeps
+every lockout finite and user-recoverable.
 
 
 .. _totp-devices:
@@ -355,7 +371,23 @@ Default: ``1``
 
 This controls the rate of throttling. The sequence of 1, 2, 4, 8... seconds is
 multiplied by this factor to define the delay imposed after 1, 2, 3, 4...
-successive failures. Set to ``0`` to disable throttling completely.
+successive failures. Set to ``0`` to disable throttling completely. The delay
+is capped at :setting:`OTP_TOTP_THROTTLE_MAX_DELAY` and the accumulated
+failure state expires on its own once the lockout window elapses, so a device
+always recovers without administrator intervention.
+
+
+.. setting:: OTP_TOTP_THROTTLE_MAX_DELAY
+
+**OTP_TOTP_THROTTLE_MAX_DELAY**
+
+Default: ``900``
+
+The maximum length, in seconds, of a single lockout window. Exponential
+back-off still applies to the first successive failures, but once the computed
+delay reaches this value it stops growing. After the window elapses the
+failure count is cleared lazily on the next verification attempt, which keeps
+every lockout finite and user-recoverable.
 
 
 Static Devices
@@ -378,7 +410,22 @@ Default: ``1``
 
 This controls the rate of throttling. The sequence of 1, 2, 4, 8… seconds is
 multiplied by this factor to define the delay imposed after 1, 2, 3, 4…
-successive failures. Set to 0 to disable throttling completely.
+successive failures. Set to 0 to disable throttling completely. The delay is
+capped at :setting:`OTP_STATIC_THROTTLE_MAX_DELAY` and the accumulated failure
+state expires on its own once the lockout window elapses, so a device always
+recovers without administrator intervention.
+
+.. setting:: OTP_STATIC_THROTTLE_MAX_DELAY
+
+**OTP_STATIC_THROTTLE_MAX_DELAY**
+
+Default: ``900``
+
+The maximum length, in seconds, of a single lockout window. Exponential
+back-off still applies to the first successive failures, but once the computed
+delay reaches this value it stops growing. After the window elapses the
+failure count is cleared lazily on the next verification attempt, which keeps
+every lockout finite and user-recoverable.
 
 .. _addstatictoken:
 
@@ -512,7 +559,22 @@ Default: ``1``
 
 This controls the rate of throttling. The sequence of 1, 2, 4, 8… seconds is
 multiplied by this factor to define the delay imposed after 1, 2, 3, 4…
-successive failures. Set to 0 to disable throttling completely.
+successive failures. Set to 0 to disable throttling completely. The delay is
+capped at :setting:`OTP_EMAIL_THROTTLE_MAX_DELAY` and the accumulated failure
+state expires on its own once the lockout window elapses, so a device always
+recovers without administrator intervention.
+
+.. setting:: OTP_EMAIL_THROTTLE_MAX_DELAY
+
+**OTP_EMAIL_THROTTLE_MAX_DELAY**
+
+Default: ``900``
+
+The maximum length, in seconds, of a single lockout window. Exponential
+back-off still applies to the first successive failures, but once the computed
+delay reaches this value it stops growing. After the window elapses the
+failure count is cleared lazily on the next verification attempt, which keeps
+every lockout finite and user-recoverable.
 
 .. _other-plugins:
 

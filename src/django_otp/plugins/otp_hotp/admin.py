@@ -75,6 +75,7 @@ class HOTPDeviceAdmin(admin.ModelAdmin):
                     'fields': [
                         'throttling_failure_timestamp',
                         'throttling_failure_count',
+                        'throttling_locked_until',
                     ],
                 },
             ),

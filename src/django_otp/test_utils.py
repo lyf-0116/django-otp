@@ -175,6 +175,19 @@ class ThrottlingTestMixin:
         """Returns an invalid token to pass to our device under test."""
         raise NotImplementedError()
 
+    def _simulate_failures(self, count, window_seconds=None):
+        """
+        Places the device directly into the state of ``count`` accumulated
+        failures with a fresh lockout window, avoiding long real-time waits
+        and (for side-channel devices) token expiry.
+        """
+        window_seconds = window_seconds or self.device.get_throttle_max_delay()
+        now = timezone.now()
+        self.device.throttling_failure_count = count
+        self.device.throttling_failure_timestamp = now
+        self.device.throttling_locked_until = now + timedelta(seconds=window_seconds)
+        self.device.save()
+
     #
     # Tests
     #
@@ -234,22 +247,128 @@ class ThrottlingTestMixin:
 
     def test_verify_is_allowed_with_large_failure_count(self):
         """
-        A high failure count (e.g. after a sustained run of failed
-        attempts, or an admin editing the field directly) used to overflow
-        the exponential backoff delay calculation and crash instead of
-        just reporting a distant lockout.
+        A high failure count (e.g. after a sustained run of failed attempts,
+        or an admin editing the field directly) must not overflow the backoff
+        calculation or produce an effectively permanent lockout. The delay is
+        capped at the configured maximum and the device recovers on its own
+        once the lockout window elapses.
 
         https://github.com/django-otp/django-otp/issues/172
         """
-        self.device.throttling_failure_count = 90
-        self.device.throttling_failure_timestamp = timezone.now()
+        self._simulate_failures(90, window_seconds=10)
 
         verify_is_allowed, data = self.device.verify_is_allowed()
 
         self.assertEqual(verify_is_allowed, False)
         self.assertEqual(data['reason'], VerifyNotAllowed.N_FAILED_ATTEMPTS)
         self.assertEqual(data['failure_count'], 90)
-        self.assertGreater(data['locked_until'], timezone.now())
+        self.assertEqual(data['locked_until'], self.device.throttling_locked_until)
+
+        with freeze_time() as frozen_time:
+            frozen_time.tick(timedelta(seconds=11))
+            verify_is_allowed, data = self.device.verify_is_allowed()
+
+        self.assertEqual(verify_is_allowed, True)
+        self.assertEqual(data, None)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.throttling_failure_count, 0)
+        self.assertIsNone(self.device.throttling_failure_timestamp)
+        self.assertIsNone(self.device.throttling_locked_until)
+
+    def test_backoff_delay_is_capped_at_max_delay(self):
+        """
+        Exponential back-off applies to the first failures, but the lockout
+        window never exceeds ``get_throttle_max_delay``.
+        """
+        max_delay = self.device.get_throttle_max_delay()
+        self.device.verify_token(self.invalid_token())
+        first_window = (
+            self.device.throttling_locked_until - timezone.now()
+        ).total_seconds()
+        self.assertAlmostEqual(
+            first_window, self.device.get_throttle_factor(), delta=0.1
+        )
+
+        # A failure count whose raw back-off would far exceed the cap still
+        # produces a bounded, user-recoverable window.
+        self._simulate_failures(90)
+        capped_window = (
+            self.device.throttling_locked_until - timezone.now()
+        ).total_seconds()
+        self.assertLessEqual(capped_window, max_delay + 0.1)
+
+    def test_backoff_window_doubles_with_failure_count(self):
+        """
+        The lockout window follows the ``factor * 2**(n-1)`` curve, while
+        attempts inside an active window are rejected without extending it.
+        """
+        factor = self.device.get_throttle_factor()
+
+        with freeze_time() as frozen_time:
+            self.device.verify_token(self.invalid_token())
+            first_window = (
+                self.device.throttling_locked_until - timezone.now()
+            ).total_seconds()
+            self.assertAlmostEqual(first_window, factor, delta=0.1)
+
+            # An attempt inside the active window is rejected but does not
+            # change the state.
+            self.device.verify_token(self.invalid_token())
+            self.assertEqual(self.device.throttling_failure_count, 1)
+
+            # Simulate a second accumulated failure (e.g. an attacker who
+            # kept retrying across successive windows). The window doubles.
+            frozen_time.tick(timedelta(seconds=factor + 0.1))
+            self._simulate_failures(2, window_seconds=factor * 2)
+            self.assertEqual(self.device.throttling_failure_count, 2)
+            locked_until = self.device.throttling_locked_until
+            second_window = (
+                self.device.throttling_locked_until - timezone.now()
+            ).total_seconds()
+            self.assertAlmostEqual(second_window, factor * 2, delta=0.1)
+
+            # Retrying inside the new window still must not extend it.
+            self.device.verify_token(self.invalid_token())
+            self.assertEqual(self.device.throttling_failure_count, 2)
+            self.assertEqual(self.device.throttling_locked_until, locked_until)
+
+    def test_failure_state_decays_lazily_after_window_elapses(self):
+        """
+        After the lockout window elapses, the next interaction clears the
+        accumulated failures without any background task, so verification is
+        allowed again and a fresh failure restarts the back-off at the bottom.
+        """
+        self._simulate_failures(5, window_seconds=10)
+
+        with freeze_time() as frozen_time:
+            frozen_time.tick(timedelta(seconds=11))
+            allowed, _ = self.device.verify_is_allowed()
+            self.assertTrue(allowed)
+
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.throttling_failure_count, 0)
+        self.assertIsNone(self.device.throttling_failure_timestamp)
+        self.assertIsNone(self.device.throttling_locked_until)
+
+        self.device.verify_token(self.invalid_token())
+        self.assertEqual(self.device.throttling_failure_count, 1)
+
+    def test_successful_verification_clears_lockout(self):
+        """
+        A successful verification within an expired lockout window clears the
+        whole failure state immediately.
+        """
+        self._simulate_failures(3, window_seconds=10)
+
+        with freeze_time() as frozen_time:
+            frozen_time.tick(timedelta(seconds=11))
+            verified = self.device.verify_token(self.valid_token())
+
+        self.assertTrue(verified)
+        self.device.refresh_from_db()
+        self.assertEqual(self.device.throttling_failure_count, 0)
+        self.assertIsNone(self.device.throttling_failure_timestamp)
+        self.assertIsNone(self.device.throttling_locked_until)
 
 
 class CooldownTestMixin:
