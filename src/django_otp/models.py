@@ -128,11 +128,15 @@ class Device(models.Model):
         return '{0}.{1}'.format(cls._meta.app_label, cls._meta.model_name)
 
     @classmethod
-    def from_persistent_id(cls, persistent_id, for_verify=False):
+    def from_persistent_id(cls, persistent_id, for_verify=False, confirmed=None):
         """
         Loads a device from its persistent id::
 
             device == Device.from_persistent_id(device.persistent_id)
+
+        By default, devices are returned regardless of their confirmation
+        status. Pass ``confirmed=True`` or ``confirmed=False`` to restrict
+        the lookup to confirmed or unconfirmed devices, respectively.
 
         :param bool for_verify: If ``True``, we'll load the device with
             :meth:`~django.db.models.query.QuerySet.select_for_update` to
@@ -141,23 +145,29 @@ class Device(models.Model):
 
         """
         with suppress(ValueError, LookupError):
-            return cls._filter_persistent_id(persistent_id, for_verify).first()
+            return cls._filter_persistent_id(
+                persistent_id, for_verify, confirmed
+            ).first()
         return None
 
     @classmethod
-    async def afrom_persistent_id(cls, persistent_id, for_verify=False):
+    async def afrom_persistent_id(cls, persistent_id, for_verify=False, confirmed=None):
         with suppress(ValueError, LookupError):
-            return await cls._filter_persistent_id(persistent_id, for_verify).afirst()
+            return await cls._filter_persistent_id(
+                persistent_id, for_verify, confirmed
+            ).afirst()
         return None
 
     @classmethod
-    def _filter_persistent_id(cls, persistent_id, for_verify=False):
+    def _filter_persistent_id(cls, persistent_id, for_verify=False, confirmed=None):
         model_label, device_id = persistent_id.rsplit("/", 1)
         app_label, model_name = model_label.split(".")
 
         device_cls = apps.get_model(app_label, model_name)
         if issubclass(device_cls, Device):
             device_set = device_cls.objects.filter(id=int(device_id))
+            if confirmed is not None:
+                device_set = device_set.filter(confirmed=bool(confirmed))
             if for_verify:
                 device_set = device_set.select_for_update()
             return device_set

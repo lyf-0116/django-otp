@@ -7,7 +7,8 @@ DEVICE_ID_SESSION_KEY = 'otp_device_id'
 def login(request, device):
     """
     Persist the given OTP device in the current session. The device will be
-    rejected if it does not belong to ``request.user``.
+    rejected if it does not belong to ``request.user`` or has not been
+    confirmed.
 
     This is called automatically any time :func:`django.contrib.auth.login` is
     called with a user having an ``otp_device`` atribute. If you use Django's
@@ -22,9 +23,16 @@ def login(request, device):
     """
     user = getattr(request, 'user', None)
 
-    if (user is not None) and (device is not None) and (device.user_id == user.pk):
+    if (
+        (user is not None)
+        and (device is not None)
+        and (device.user_id == user.pk)
+        and device.confirmed
+    ):
         request.session[DEVICE_ID_SESSION_KEY] = device.persistent_id
         request.user.otp_device = device
+    elif user is not None:
+        user.otp_device = None
 
 
 def _handle_auth_login(sender, request, user, **kwargs):
@@ -62,10 +70,11 @@ def verify_token(user, device_id, token):
 
     verified = None
     with transaction.atomic():
-        device = Device.from_persistent_id(device_id, for_verify=True)
+        device = Device.from_persistent_id(device_id, for_verify=True, confirmed=True)
         if (
             (device is not None)
             and (device.user_id == user.pk)
+            and device.confirmed
             and device.verify_token(token)
         ):
             verified = device

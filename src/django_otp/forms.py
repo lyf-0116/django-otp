@@ -125,15 +125,19 @@ class OTPAuthenticationFormMixin:
         device_id = self.cleaned_data.get('otp_device')
 
         if device_id:
-            device = Device.from_persistent_id(device_id, for_verify=True)
+            device = Device.from_persistent_id(
+                device_id, for_verify=True, confirmed=True
+            )
         else:
             device = None
 
         # SECURITY: The form doesn't validate otp_device for us, since we don't
         # have the list of choices until we authenticate the user. Without the
         # following, an attacker could authenticate using some other user's OTP
-        # device.
-        if (device is not None) and (device.user_id != user.pk):
+        # device or complete login with a device that has not been confirmed.
+        if (device is not None) and (
+            (device.user_id != user.pk) or (not device.confirmed)
+        ):
             device = None
 
         return device
