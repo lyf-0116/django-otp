@@ -1,3 +1,18 @@
+v1.7.6 (unreleased)
+--------------------------------------------------------------------------------
+
+- Static tokens (recovery codes) now write a ``StaticTokenUse`` audit record
+  (device, account and timestamp) in the same transaction that deletes the
+  consumed token. ``StaticDevice`` exposes ``remaining_count`` and
+  ``latest_use`` for the remaining-code count and most recent consumption.
+- Added ``StaticTokenBatch`` and transactional batch reissue
+  (``StaticDevice.reissue_batch``/``reissue_tokens``/``reissue_codes`` and the
+  ``reissuestatictokens`` command). Reissue revokes the previous batch and its
+  tokens so old and new codes are never valid at the same time; revoked codes
+  are excluded from ``remaining_count`` while legacy batch-less codes count
+  normally.
+
+
 v1.7.5 - October 16, 2026 - Revoke sessions for unconfirmed devices
 --------------------------------------------------------------------------------
 

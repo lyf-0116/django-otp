@@ -364,9 +364,43 @@ Static Devices
 .. module:: django_otp.plugins.otp_static
 
 .. automodule:: django_otp.plugins.otp_static.models
-    :members: StaticDevice, StaticToken
+    :members: StaticDevice, StaticToken, StaticTokenBatch, StaticTokenUse
 
 .. autoclass:: django_otp.plugins.otp_static.admin.StaticDeviceAdmin
+
+Recovery code auditing and reissue
+''''''''''''''''''''''''''''''''''
+
+Static tokens are commonly used as one-time recovery codes. To make their use
+auditable, a successful verification deletes the consumed
+:class:`~django_otp.plugins.otp_static.models.StaticToken` and writes one
+:class:`~django_otp.plugins.otp_static.models.StaticTokenUse` record (device,
+account and timestamp) in the same database transaction. If the audit record
+cannot be written, the deletion is rolled back as well, so a code can never
+disappear without a matching record and a failed delete can never leave a false
+record.
+
+The device exposes the current availability and history:
+
+* ``device.remaining_count`` (or ``device.get_remaining_count()``) is the
+  number of codes that can still be verified.
+* ``device.latest_use`` is the most recent ``StaticTokenUse`` record (or
+  ``None``); the timestamp is also available as the existing
+  ``device.last_used_at`` field. ``device.token_uses`` and
+  ``device.recent_uses(limit)`` provide the full history.
+
+``remaining_count`` is always derived from the current stock of active rows.
+Consumed codes have their rows deleted, revoked codes are excluded and tokens
+created before batching existed (``batch is None``) count normally.
+
+Reissuing a recovery-code batch with
+:meth:`StaticDevice.reissue_batch` (or the
+:meth:`~django_otp.plugins.otp_static.models.StaticDevice.reissue_tokens` /
+:meth:`~django_otp.plugins.otp_static.models.StaticDevice.reissue_codes`
+helpers) marks every active batch and token as revoked and creates a fresh
+batch in one transaction. Revoked rows are retained for auditing, but the old
+codes can no longer be verified and are not counted as remaining, so an old and
+a new batch are never valid at the same time.
 
 Static Settings
 '''''''''''''''
@@ -380,6 +414,16 @@ This controls the rate of throttling. The sequence of 1, 2, 4, 8… seconds is
 multiplied by this factor to define the delay imposed after 1, 2, 3, 4…
 successive failures. Set to 0 to disable throttling completely.
 
+.. setting:: OTP_STATIC_TOKEN_COUNT
+
+**OTP_STATIC_TOKEN_COUNT**
+
+Default: ``10``
+
+The batch size used when reissuing codes for a device that currently has no
+active tokens and no explicit count was supplied. When the device still has
+active codes, a reissue preserves that current count instead.
+
 .. _addstatictoken:
 
 addstatictoken
@@ -388,6 +432,14 @@ addstatictoken
 The static plugin also includes a management command called ``addstatictoken``,
 which will add a single static token to any account. This is useful for
 bootstrapping and emergency access. Run ``manage.py addstatictoken -h`` for
+details.
+
+reissuestatictokens
+'''''''''''''''''''
+
+``reissuestatictokens`` replaces the whole static-token set of an account with
+a freshly generated batch, revoking the previous codes atomically. The new
+codes are printed, one per line. Run ``manage.py reissuestatictokens -h`` for
 details.
 
 
